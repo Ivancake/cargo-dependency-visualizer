@@ -14,12 +14,14 @@ if __package__:
     from .reverse_dependencies import find_reverse_dependencies
     from .test_repository import load_test_repository
     from .versions import version_key
+    from .visualization import format_node, to_ascii_tree, to_graphviz
 else:
     from cargo_graph import build_cargo_dependency_graph
     from dependency_graph import build_test_dependency_graph
     from reverse_dependencies import find_reverse_dependencies
     from test_repository import load_test_repository
     from versions import version_key
+    from visualization import format_node, to_ascii_tree, to_graphviz
 
 
 SUCCESS = 0
@@ -123,6 +125,8 @@ def validate_args(args):
     validate_filter(args.filter)
     if args.reverse is not None:
         parse_reverse_target(args.reverse, args.test_mode)
+        if args.ascii:
+            raise ValueError("--ascii: нельзя использовать вместе с --reverse.")
 
 
 def create_parser():
@@ -149,7 +153,8 @@ def create_parser():
         "--version", required=True, help="Версия пакета"
     )
     parser.add_argument(
-        "--ascii", action="store_true", help="Выводить ASCII-дерево"
+        "--ascii", action="store_true",
+        help="Дополнительно вывести ASCII-дерево"
     )
     # Пустая подстрока по умолчанию означает отсутствие фильтрации.
     parser.add_argument(
@@ -174,25 +179,13 @@ def parse_args(argv=None):
     return args
 
 
-def format_node(node):
-    """Подготовить подпись тестового пакета или пары (имя, версия)."""
-    if isinstance(node, tuple):
-        package, version = node
-        return f"{package}@{version}"
-    return node
-
-
-def print_graph(root, graph):
-    """Вывести граф списком связей в порядке обхода BFS."""
-    print(f"Граф зависимостей для {format_node(root)}:")
-    if not graph:
-        print("После фильтрации граф пуст.")
-        return
-    for package, dependencies in graph.items():
-        targets = ", ".join(format_node(node) for node in dependencies)
-        if not targets:
-            targets = "нет зависимостей"
-        print(f"{format_node(package)} -> {targets}")
+def print_graph(root, graph, ascii_mode=False):
+    """Вывести описание Graphviz и при необходимости ASCII-дерево."""
+    print(to_graphviz(graph))
+    if ascii_mode:
+        print()
+        print("ASCII-дерево:")
+        print(to_ascii_tree(graph, root))
 
 
 def print_reverse_dependencies(
@@ -225,7 +218,7 @@ def run_test_mode(args):
         print_reverse_dependencies(target, repository, args.filter)
         return
     graph = build_test_dependency_graph(repository, args.package, args.filter)
-    print_graph(args.package, graph)
+    print_graph(args.package, graph, args.ascii)
 
 
 def run_cargo_mode(args):
@@ -247,7 +240,7 @@ def run_cargo_mode(args):
             scope=format_node(root)
         )
         return
-    print_graph(root, graph)
+    print_graph(root, graph, args.ascii)
 
 
 def main(argv=None):

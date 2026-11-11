@@ -182,10 +182,11 @@ class TestCommandLine(unittest.TestCase):
         graph = {root: [first, second], first: [root], second: []}
         code, output, errors, download = self.run_application(graph=graph)
         expected = [
-            "Граф зависимостей для serde@1.0.0:",
-            "serde@1.0.0 -> helper@1.0.0, helper@2.0.0",
-            "helper@1.0.0 -> serde@1.0.0",
-            "helper@2.0.0 -> нет зависимостей",
+            "digraph dependencies {", "    rankdir=LR;",
+            '    n0 [label="serde@1.0.0"];',
+            '    n1 [label="helper@1.0.0"];',
+            '    n2 [label="helper@2.0.0"];',
+            "    n0 -> n1;", "    n0 -> n2;", "    n1 -> n0;", "}"
         ]
         self.assertEqual(code, SUCCESS)
         self.assertEqual(output.splitlines(), expected)
@@ -201,8 +202,8 @@ class TestCommandLine(unittest.TestCase):
         self.assertEqual(
             output.splitlines(),
             [
-                "Граф зависимостей для serde@1.0.0:",
-                "serde@1.0.0 -> нет зависимостей"
+                "digraph dependencies {", "    rankdir=LR;",
+                '    n0 [label="serde@1.0.0"];', "}"
             ]
         )
         self.assertEqual(errors, "")
@@ -235,8 +236,7 @@ class TestCommandLine(unittest.TestCase):
         )
         self.assertEqual(code, SUCCESS)
         self.assertEqual(output.splitlines(), [
-            "Граф зависимостей для serde@1.0.0:",
-            "После фильтрации граф пуст."
+            "digraph dependencies {", "    rankdir=LR;", "}"
         ])
         self.assertEqual(errors, "")
 
@@ -246,8 +246,8 @@ class TestCommandLine(unittest.TestCase):
         code, output, errors, _ = self.run_application(graph=graph)
         self.assertEqual(code, SUCCESS)
         self.assertEqual(output.splitlines(), [
-            "Граф зависимостей для serde@1.0.0+build.7:",
-            "serde@1.0.0+build.7 -> нет зависимостей"
+            "digraph dependencies {", "    rankdir=LR;",
+            '    n0 [label="serde@1.0.0+build.7"];', "}"
         ])
         self.assertEqual(errors, "")
 
@@ -257,8 +257,10 @@ class TestCommandLine(unittest.TestCase):
         code, output, errors, download = self.run_test_application(graph)
         self.assertEqual(code, SUCCESS)
         self.assertEqual(output.splitlines(), [
-            "Граф зависимостей для A:",
-            "A -> B, C", "B -> C", "C -> нет зависимостей"
+            "digraph dependencies {", "    rankdir=LR;",
+            '    n0 [label="A"];', '    n1 [label="B"];',
+            '    n2 [label="C"];', "    n0 -> n1;", "    n0 -> n2;",
+            "    n1 -> n2;", "}"
         ])
         self.assertEqual(errors, "")
         download.assert_not_called()
@@ -269,7 +271,9 @@ class TestCommandLine(unittest.TestCase):
         code, output, errors, _ = self.run_test_application(graph)
         self.assertEqual(code, SUCCESS)
         self.assertEqual(output.splitlines(), [
-            "Граф зависимостей для A:", "A -> A, B", "B -> A"
+            "digraph dependencies {", "    rankdir=LR;",
+            '    n0 [label="A"];', '    n1 [label="B"];',
+            "    n0 -> n0;", "    n0 -> n1;", "    n1 -> n0;", "}"
         ])
         self.assertEqual(errors, "")
 
@@ -281,7 +285,9 @@ class TestCommandLine(unittest.TestCase):
         )
         self.assertEqual(code, SUCCESS)
         self.assertEqual(output.splitlines(), [
-            "Граф зависимостей для A:", "A -> C", "C -> нет зависимостей"
+            "digraph dependencies {", "    rankdir=LR;",
+            '    n0 [label="A"];', '    n1 [label="C"];',
+            "    n0 -> n1;", "}"
         ])
         self.assertEqual(errors, "")
 
@@ -292,7 +298,7 @@ class TestCommandLine(unittest.TestCase):
         )
         self.assertEqual(code, SUCCESS)
         self.assertEqual(output.splitlines(), [
-            "Граф зависимостей для A:", "После фильтрации граф пуст."
+            "digraph dependencies {", "    rankdir=LR;", "}"
         ])
         self.assertEqual(errors, "")
 
@@ -321,6 +327,64 @@ class TestCommandLine(unittest.TestCase):
         self.assertEqual(output, "")
         self.assertIn("не описан отдельным ключом", errors)
         self.assertNotIn("Traceback", errors)
+
+    def test_cargo_ascii_cycle(self):
+        """Вывести Graphviz и дерево версий Cargo с отметкой цикла."""
+        root, child = ("serde", "1.0.0"), ("helper", "2.0.0")
+        code, output, errors, _ = self.run_application(
+            self.args + ["--ascii"], {root: [child], child: [root]}
+        )
+        self.assertEqual(code, SUCCESS)
+        self.assertEqual(errors, "")
+        self.assertTrue(output.startswith("digraph dependencies {\n"))
+        self.assertIn("    n1 -> n0;\n", output)
+        self.assertTrue(output.endswith(
+            "\nASCII-дерево:\nserde@1.0.0\n`-- helper@2.0.0\n"
+            "    `-- serde@1.0.0 [цикл]\n"
+        ))
+
+    def test_json_ascii_shared_dependency(self):
+        """Показать общую зависимость в дереве и сохранить все рёбра DOT."""
+        code, output, errors, download = self.run_test_application(
+            {"A": ["B", "C"], "B": ["C"], "C": []}, ["--ascii"]
+        )
+        self.assertEqual(code, SUCCESS)
+        self.assertEqual(errors, "")
+        self.assertIn("    n0 -> n2;\n", output)
+        self.assertIn("    n1 -> n2;\n", output)
+        self.assertTrue(output.endswith(
+            "\nASCII-дерево:\nA\n|-- B\n|   `-- C\n`-- C [повтор]\n"
+        ))
+        download.assert_not_called()
+
+    def test_filtered_ascii_root(self):
+        """Вывести пустой DOT и пояснение для дерева исключённого корня."""
+        code, output, errors, _ = self.run_test_application(
+            {"A": []}, ["--ascii", "--filter", "A"]
+        )
+        self.assertEqual(code, SUCCESS)
+        self.assertEqual(errors, "")
+        self.assertEqual(
+            output, "digraph dependencies {\n    rankdir=LR;\n}\n"
+            "\nASCII-дерево:\n(пустой граф)\n"
+        )
+
+    def test_cargo_ascii_actual_root_version(self):
+        """Использовать в дереве фактическую версию корня из индекса."""
+        code, output, errors, _ = self.run_application(
+            self.args + ["--ascii"], {("serde", "1.0.0+build.7"): []}
+        )
+        self.assertEqual(code, SUCCESS)
+        self.assertEqual(errors, "")
+        self.assertTrue(output.endswith(
+            "\nASCII-дерево:\nserde@1.0.0+build.7\n"
+        ))
+
+    def test_reverse_ascii_conflict(self):
+        """Отклонить сочетание обратного поиска и прямого ASCII-дерева."""
+        self.assert_cli_error(
+            self.args + ["--reverse", "serde@1.0.0", "--ascii"], "--ascii"
+        )
 
     def test_help(self):
         """Проверить справку и успешное завершение при --help."""
