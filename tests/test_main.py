@@ -1,4 +1,4 @@
-"""Тесты настроек и обработки ошибок первого этапа."""
+"""Тесты настроек, вывода зависимостей и обработки ошибок приложения."""
 
 import io
 import unittest
@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from src.main import main, parse_args, validate_file
+from src.main import RUNTIME_ERROR, SUCCESS, main, parse_args, validate_file
 
 
 CLI_ERROR = 2
@@ -43,6 +43,20 @@ class TestCommandLine(unittest.TestCase):
         self.assertEqual(error.exception.code, CLI_ERROR)
         self.assertIn(option, stream.getvalue())
         self.assertNotIn("Traceback", stream.getvalue())
+
+    def run_application(self, args=None, dependencies=None, error=None):
+        """Запустить приложение с подменой загрузки и перехватом вывода."""
+        output = io.StringIO()
+        errors = io.StringIO()
+        result = [] if dependencies is None else dependencies
+        # Сеть подменяем, чтобы тесты работали без интернета.
+        with patch(
+            "src.main.get_direct_dependencies",
+            return_value=result, side_effect=error
+        ) as download:
+            with redirect_stdout(output), redirect_stderr(errors):
+                code = main(self.args if args is None else args)
+        return code, output.getvalue(), errors.getvalue(), download
 
     def test_default_settings(self):
         """Проверить обязательные настройки и значения по умолчанию."""
@@ -147,20 +161,64 @@ class TestCommandLine(unittest.TestCase):
                     validate_file("private.json")
 
     def test_main_output(self):
-        """Проверить вывод всех шести настроек в формате ключ=значение."""
-        stream = io.StringIO()
-        with patch("sys.argv", ["main.py"] + self.args + ["--ascii"]):
-            with redirect_stdout(stream):
-                main()
-        expected = [
-            "package=serde",
-            "repository=https://index.crates.io",
-            "test_mode=False",
-            "version=1.0.0",
-            "ascii=True",
-            "filter="
+        """Проверить вывод зависимостей и сохранение их условий."""
+        dependencies = [
+            {"name": "serde_derive", "req": "^1.0", "kind": None},
+            {
+                "name": "alias", "package": "actual", "req": "~2.0",
+                "kind": "build", "optional": True, "target": "cfg(windows)"
+            },
         ]
-        self.assertEqual(stream.getvalue().splitlines(), expected)
+        code, output, errors, download = self.run_application(
+            dependencies=dependencies
+        )
+        expected = [
+            "Прямые зависимости serde 1.0.0:",
+            "- serde_derive ^1.0 (тип: normal)",
+            "- actual ~2.0 (тип: build; необязательная; "
+            "платформа: cfg(windows); псевдоним: alias)",
+        ]
+        self.assertEqual(code, SUCCESS)
+        self.assertEqual(output.splitlines(), expected)
+        self.assertEqual(errors, "")
+        download.assert_called_once_with(
+            "https://index.crates.io", "serde", "1.0.0"
+        )
+
+    def test_no_dependencies_output(self):
+        """Вывести понятное сообщение для пакета без зависимостей."""
+        code, output, errors, _ = self.run_application()
+        self.assertEqual(code, SUCCESS)
+        self.assertEqual(
+            output.splitlines(),
+            ["Прямые зависимости serde 1.0.0:", "Зависимостей нет."]
+        )
+        self.assertEqual(errors, "")
+
+    def test_download_failure(self):
+        """Вывести ошибку загрузки в stderr и вернуть код ошибки."""
+        code, output, errors, _ = self.run_application(
+            error=ValueError("Сервер недоступен")
+        )
+        self.assertEqual(code, RUNTIME_ERROR)
+        self.assertEqual(output, "")
+        self.assertIn("Ошибка: Сервер недоступен", errors)
+        self.assertNotIn("Traceback", errors)
+
+    def test_test_mode_message(self):
+        """Сообщить о будущем тестовом режиме, не обращаясь к сети."""
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "graph.json"
+            path.write_text('{"A": []}', encoding="utf-8")
+            args = [
+                "--package", "A", "--version", "1.0.0",
+                "--repository", str(path), "--test-mode"
+            ]
+            code, output, errors, download = self.run_application(args)
+        self.assertEqual(code, RUNTIME_ERROR)
+        self.assertEqual(output, "")
+        self.assertIn("этапе 3", errors)
+        download.assert_not_called()
 
     def test_help(self):
         """Проверить справку и успешное завершение при --help."""

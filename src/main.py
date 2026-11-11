@@ -2,9 +2,20 @@
 
 import argparse
 import re
+import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
+
+# Поддерживаем и прямой запуск файла, и импорт из тестов.
+if __package__:
+    from .cargo_repository import get_direct_dependencies
+else:
+    from cargo_repository import get_direct_dependencies
+
+
+SUCCESS = 0
+RUNTIME_ERROR = 1
 
 # Части шаблона версии по правилам SemVer.
 NUMBER_PATTERN = r"(?:0|[1-9][0-9]*)"
@@ -128,14 +139,50 @@ def parse_args(argv=None):
     return args
 
 
-def main():
-    """Вывести настройки прототипа в формате ключ=значение."""
-    args = parse_args()
-    # Превращаем настройки в словарь и выводим каждую пару.
-    for name, value in vars(args).items():
-        print(f"{name}={value}")
+def format_dependency(dependency):
+    """Подготовить строку с именем и условиями одной зависимости."""
+    # При переименовании настоящее имя хранится в поле package.
+    name = dependency.get("package") or dependency["name"]
+    kind = dependency.get("kind") or "normal"
+    details = [f"тип: {kind}"]
+    if dependency.get("optional", False):
+        details.append("необязательная")
+    if dependency.get("target"):
+        details.append(f"платформа: {dependency['target']}")
+    if name != dependency["name"]:
+        details.append(f"псевдоним: {dependency['name']}")
+    return f"- {name} {dependency['req']} ({'; '.join(details)})"
+
+
+def print_dependencies(package, version, dependencies):
+    """Вывести все прямые зависимости выбранной версии пакета."""
+    print(f"Прямые зависимости {package} {version}:")
+    if not dependencies:
+        print("Зависимостей нет.")
+        return
+    for dependency in dependencies:
+        print(format_dependency(dependency))
+
+
+def main(argv=None):
+    """Получить параметры, загрузить зависимости и вернуть код завершения."""
+    args = parse_args(argv)
+    try:
+        if args.test_mode:
+            raise ValueError(
+                "Чтение тестового графа будет добавлено на этапе 3."
+            )
+        dependencies = get_direct_dependencies(
+            args.repository, args.package, args.version
+        )
+        print_dependencies(args.package, args.version, dependencies)
+    except ValueError as error:
+        # Сообщения об ошибках отделяем от обычного вывода программы.
+        print(f"Ошибка: {error}", file=sys.stderr)
+        return RUNTIME_ERROR
+    return SUCCESS
 
 
 # Запускаем приложение только при непосредственном запуске файла.
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
