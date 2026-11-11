@@ -1,6 +1,7 @@
-"""Тесты настроек, вывода зависимостей и обработки ошибок приложения."""
+"""Тесты настроек, вывода графов и обработки ошибок приложения."""
 
 import io
+import json
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -44,19 +45,32 @@ class TestCommandLine(unittest.TestCase):
         self.assertIn(option, stream.getvalue())
         self.assertNotIn("Traceback", stream.getvalue())
 
-    def run_application(self, args=None, dependencies=None, error=None):
-        """Запустить приложение с подменой загрузки и перехватом вывода."""
+    def run_application(self, args=None, graph=None, error=None):
+        """Запустить приложение с подменой графа Cargo и перехватом вывода."""
         output = io.StringIO()
         errors = io.StringIO()
-        result = [] if dependencies is None else dependencies
+        result = {("serde", "1.0.0"): []} if graph is None else graph
         # Сеть подменяем, чтобы тесты работали без интернета.
         with patch(
-            "src.main.get_direct_dependencies",
+            "src.main.build_cargo_dependency_graph",
             return_value=result, side_effect=error
         ) as download:
             with redirect_stdout(output), redirect_stderr(errors):
                 code = main(self.args if args is None else args)
         return code, output.getvalue(), errors.getvalue(), download
+
+    def run_test_application(self, graph, extra_args=None, raw_text=None):
+        """Запустить тестовый режим с настоящим временным JSON-файлом."""
+        text = json.dumps(graph) if raw_text is None else raw_text
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "graph.json"
+            path.write_text(text, encoding="utf-8")
+            args = [
+                "--package", "A", "--version", "1.0.0",
+                "--repository", str(path), "--test-mode"
+            ]
+            args.extend([] if extra_args is None else extra_args)
+            return self.run_application(args)
 
     def test_default_settings(self):
         """Проверить обязательные настройки и значения по умолчанию."""
@@ -161,28 +175,23 @@ class TestCommandLine(unittest.TestCase):
                     validate_file("private.json")
 
     def test_main_output(self):
-        """Проверить вывод зависимостей и сохранение их условий."""
-        dependencies = [
-            {"name": "serde_derive", "req": "^1.0", "kind": None},
-            {
-                "name": "alias", "package": "actual", "req": "~2.0",
-                "kind": "build", "optional": True, "target": "cfg(windows)"
-            },
-        ]
-        code, output, errors, download = self.run_application(
-            dependencies=dependencies
-        )
+        """Вывести цикл и две версии библиотеки как разные вершины."""
+        root = ("serde", "1.0.0")
+        first = ("helper", "1.0.0")
+        second = ("helper", "2.0.0")
+        graph = {root: [first, second], first: [root], second: []}
+        code, output, errors, download = self.run_application(graph=graph)
         expected = [
-            "Прямые зависимости serde 1.0.0:",
-            "- serde_derive ^1.0 (тип: normal)",
-            "- actual ~2.0 (тип: build; необязательная; "
-            "платформа: cfg(windows); псевдоним: alias)",
+            "Граф зависимостей для serde@1.0.0:",
+            "serde@1.0.0 -> helper@1.0.0, helper@2.0.0",
+            "helper@1.0.0 -> serde@1.0.0",
+            "helper@2.0.0 -> нет зависимостей",
         ]
         self.assertEqual(code, SUCCESS)
         self.assertEqual(output.splitlines(), expected)
         self.assertEqual(errors, "")
         download.assert_called_once_with(
-            "https://index.crates.io", "serde", "1.0.0"
+            "https://index.crates.io", "serde", "1.0.0", ""
         )
 
     def test_no_dependencies_output(self):
@@ -191,7 +200,10 @@ class TestCommandLine(unittest.TestCase):
         self.assertEqual(code, SUCCESS)
         self.assertEqual(
             output.splitlines(),
-            ["Прямые зависимости serde 1.0.0:", "Зависимостей нет."]
+            [
+                "Граф зависимостей для serde@1.0.0:",
+                "serde@1.0.0 -> нет зависимостей"
+            ]
         )
         self.assertEqual(errors, "")
 
@@ -205,20 +217,110 @@ class TestCommandLine(unittest.TestCase):
         self.assertIn("Ошибка: Сервер недоступен", errors)
         self.assertNotIn("Traceback", errors)
 
-    def test_test_mode_message(self):
-        """Сообщить о будущем тестовом режиме, не обращаясь к сети."""
-        with TemporaryDirectory() as directory:
-            path = Path(directory) / "graph.json"
-            path.write_text('{"A": []}', encoding="utf-8")
-            args = [
-                "--package", "A", "--version", "1.0.0",
-                "--repository", str(path), "--test-mode"
-            ]
-            code, output, errors, download = self.run_application(args)
+    def test_cargo_filter_parameter(self):
+        """Передать фильтр построителю графа реальных пакетов."""
+        code, _, errors, build = self.run_application(
+            self.args + ["--filter", "derive"]
+        )
+        self.assertEqual(code, SUCCESS)
+        self.assertEqual(errors, "")
+        build.assert_called_once_with(
+            "https://index.crates.io", "serde", "1.0.0", "derive"
+        )
+
+    def test_filtered_cargo_root(self):
+        """Вывести пустой граф при исключении начального пакета Cargo."""
+        code, output, errors, _ = self.run_application(
+            self.args + ["--filter", "serde"], graph={}
+        )
+        self.assertEqual(code, SUCCESS)
+        self.assertEqual(output.splitlines(), [
+            "Граф зависимостей для serde@1.0.0:",
+            "После фильтрации граф пуст."
+        ])
+        self.assertEqual(errors, "")
+
+    def test_actual_root_version(self):
+        """Показать фактическую версию корня с метаданными из индекса."""
+        graph = {("serde", "1.0.0+build.7"): []}
+        code, output, errors, _ = self.run_application(graph=graph)
+        self.assertEqual(code, SUCCESS)
+        self.assertEqual(output.splitlines(), [
+            "Граф зависимостей для serde@1.0.0+build.7:",
+            "serde@1.0.0+build.7 -> нет зависимостей"
+        ])
+        self.assertEqual(errors, "")
+
+    def test_test_mode_output(self):
+        """Прочитать файл и вывести достижимый граф без сетевого запроса."""
+        graph = {"A": ["B", "C"], "B": ["C"], "C": []}
+        code, output, errors, download = self.run_test_application(graph)
+        self.assertEqual(code, SUCCESS)
+        self.assertEqual(output.splitlines(), [
+            "Граф зависимостей для A:",
+            "A -> B, C", "B -> C", "C -> нет зависимостей"
+        ])
+        self.assertEqual(errors, "")
+        download.assert_not_called()
+
+    def test_test_mode_cycle(self):
+        """Вывести цикл и ссылку на себя, завершив работу успешно."""
+        graph = {"A": ["A", "B"], "B": ["A"]}
+        code, output, errors, _ = self.run_test_application(graph)
+        self.assertEqual(code, SUCCESS)
+        self.assertEqual(output.splitlines(), [
+            "Граф зависимостей для A:", "A -> A, B", "B -> A"
+        ])
+        self.assertEqual(errors, "")
+
+    def test_test_mode_filter(self):
+        """Применить фильтр к тестовому графу и остановить обход ветки."""
+        graph = {"A": ["B", "C"], "B": ["D"], "C": [], "D": []}
+        code, output, errors, _ = self.run_test_application(
+            graph, ["--filter", "B"]
+        )
+        self.assertEqual(code, SUCCESS)
+        self.assertEqual(output.splitlines(), [
+            "Граф зависимостей для A:", "A -> C", "C -> нет зависимостей"
+        ])
+        self.assertEqual(errors, "")
+
+    def test_filtered_test_root(self):
+        """Сообщить о пустом графе при исключении начального пакета."""
+        code, output, errors, _ = self.run_test_application(
+            {"A": []}, ["--filter", "A"]
+        )
+        self.assertEqual(code, SUCCESS)
+        self.assertEqual(output.splitlines(), [
+            "Граф зависимостей для A:", "После фильтрации граф пуст."
+        ])
+        self.assertEqual(errors, "")
+
+    def test_missing_test_package(self):
+        """Показать ошибку, если начального пакета нет в файле."""
+        code, output, errors, _ = self.run_test_application({"B": []})
         self.assertEqual(code, RUNTIME_ERROR)
         self.assertEqual(output, "")
-        self.assertIn("этапе 3", errors)
-        download.assert_not_called()
+        self.assertIn("Пакет A отсутствует", errors)
+        self.assertNotIn("Traceback", errors)
+
+    def test_broken_test_json(self):
+        """Вывести понятную ошибку повреждённого JSON в stderr."""
+        code, output, errors, _ = self.run_test_application(
+            {}, raw_text='{"A": ['
+        )
+        self.assertEqual(code, RUNTIME_ERROR)
+        self.assertEqual(output, "")
+        self.assertIn("Ошибка JSON", errors)
+        self.assertNotIn("Traceback", errors)
+
+    def test_invalid_test_graph(self):
+        """Обработать ссылку на пакет, не описанный в тестовом файле."""
+        code, output, errors, _ = self.run_test_application({"A": ["B"]})
+        self.assertEqual(code, RUNTIME_ERROR)
+        self.assertEqual(output, "")
+        self.assertIn("не описан отдельным ключом", errors)
+        self.assertNotIn("Traceback", errors)
 
     def test_help(self):
         """Проверить справку и успешное завершение при --help."""

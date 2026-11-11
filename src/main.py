@@ -9,9 +9,13 @@ from urllib.parse import urlsplit
 
 # Поддерживаем и прямой запуск файла, и импорт из тестов.
 if __package__:
-    from .cargo_repository import get_direct_dependencies
+    from .cargo_graph import build_cargo_dependency_graph
+    from .dependency_graph import build_test_dependency_graph
+    from .test_repository import load_test_repository
 else:
-    from cargo_repository import get_direct_dependencies
+    from cargo_graph import build_cargo_dependency_graph
+    from dependency_graph import build_test_dependency_graph
+    from test_repository import load_test_repository
 
 
 SUCCESS = 0
@@ -72,7 +76,7 @@ def validate_file(value):
     try:
         if not path.is_file():
             raise ValueError("--repository: тестовый файл не найден.")
-        # Проверяем возможность открыть файл, его содержимое разберём позже.
+        # Проверяем доступ; структуру данных проверит загрузчик.
         with path.open("rb"):
             pass
     except OSError as error:
@@ -139,43 +143,52 @@ def parse_args(argv=None):
     return args
 
 
-def format_dependency(dependency):
-    """Подготовить строку с именем и условиями одной зависимости."""
-    # При переименовании настоящее имя хранится в поле package.
-    name = dependency.get("package") or dependency["name"]
-    kind = dependency.get("kind") or "normal"
-    details = [f"тип: {kind}"]
-    if dependency.get("optional", False):
-        details.append("необязательная")
-    if dependency.get("target"):
-        details.append(f"платформа: {dependency['target']}")
-    if name != dependency["name"]:
-        details.append(f"псевдоним: {dependency['name']}")
-    return f"- {name} {dependency['req']} ({'; '.join(details)})"
+def format_node(node):
+    """Подготовить подпись тестового пакета или пары (имя, версия)."""
+    if isinstance(node, tuple):
+        package, version = node
+        return f"{package}@{version}"
+    return node
 
 
-def print_dependencies(package, version, dependencies):
-    """Вывести все прямые зависимости выбранной версии пакета."""
-    print(f"Прямые зависимости {package} {version}:")
-    if not dependencies:
-        print("Зависимостей нет.")
+def print_graph(root, graph):
+    """Вывести граф списком связей в порядке обхода BFS."""
+    print(f"Граф зависимостей для {format_node(root)}:")
+    if not graph:
+        print("После фильтрации граф пуст.")
         return
-    for dependency in dependencies:
-        print(format_dependency(dependency))
+    for package, dependencies in graph.items():
+        targets = ", ".join(format_node(node) for node in dependencies)
+        if not targets:
+            targets = "нет зависимостей"
+        print(f"{format_node(package)} -> {targets}")
+
+
+def run_test_mode(args):
+    """Прочитать JSON, построить достижимый граф и вывести его связи."""
+    repository = load_test_repository(args.repository)
+    graph = build_test_dependency_graph(repository, args.package, args.filter)
+    print_graph(args.package, graph)
+
+
+def run_cargo_mode(args):
+    """Построить граф версий Cargo с кешированием и вывести результат."""
+    graph = build_cargo_dependency_graph(
+        args.repository, args.package, args.version, args.filter
+    )
+    # Первый ключ — корень с фактическим номером версии из индекса.
+    root = next(iter(graph), (args.package.lower(), args.version))
+    print_graph(root, graph)
 
 
 def main(argv=None):
-    """Получить параметры, загрузить зависимости и вернуть код завершения."""
+    """Запустить выбранный режим и вернуть код завершения приложения."""
     args = parse_args(argv)
     try:
         if args.test_mode:
-            raise ValueError(
-                "Чтение тестового графа будет добавлено на этапе 3."
-            )
-        dependencies = get_direct_dependencies(
-            args.repository, args.package, args.version
-        )
-        print_dependencies(args.package, args.version, dependencies)
+            run_test_mode(args)
+        else:
+            run_cargo_mode(args)
     except ValueError as error:
         # Сообщения об ошибках отделяем от обычного вывода программы.
         print(f"Ошибка: {error}", file=sys.stderr)
