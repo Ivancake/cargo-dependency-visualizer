@@ -11,11 +11,15 @@ from urllib.parse import urlsplit
 if __package__:
     from .cargo_graph import build_cargo_dependency_graph
     from .dependency_graph import build_test_dependency_graph
+    from .reverse_dependencies import find_reverse_dependencies
     from .test_repository import load_test_repository
+    from .versions import version_key
 else:
     from cargo_graph import build_cargo_dependency_graph
     from dependency_graph import build_test_dependency_graph
+    from reverse_dependencies import find_reverse_dependencies
     from test_repository import load_test_repository
+    from versions import version_key
 
 
 SUCCESS = 0
@@ -92,6 +96,21 @@ def validate_filter(value):
         )
 
 
+def parse_reverse_target(value, test_mode):
+    """Проверить цель обратного поиска и получить строку или пару."""
+    if test_mode:
+        if not re.fullmatch(r"[A-Z]+", value):
+            raise ValueError("--reverse: нужны заглавные буквы A-Z.")
+        return value
+    package, separator, version = value.partition("@")
+    valid_name = re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", package)
+    if not separator or not valid_name or not re.fullmatch(
+        VERSION_PATTERN, version
+    ):
+        raise ValueError("--reverse: нужна цель вида serde@1.0.0.")
+    return package.lower(), version
+
+
 def validate_args(args):
     """Выполнить проверки значений всех настроек приложения."""
     validate_package(args.package, args.test_mode)
@@ -102,10 +121,12 @@ def validate_args(args):
     else:
         validate_url(args.repository)
     validate_filter(args.filter)
+    if args.reverse is not None:
+        parse_reverse_target(args.reverse, args.test_mode)
 
 
-def parse_args(argv=None):
-    """Прочитать настройки приложения из командной строки."""
+def create_parser():
+    """Описать параметры приложения и встроенную справку."""
     # Создаём обработчик параметров и встроенную справку --help.
     parser = argparse.ArgumentParser(
         description="Визуализатор зависимостей пакетов Cargo.",
@@ -134,6 +155,16 @@ def parse_args(argv=None):
     parser.add_argument(
         "--filter", default="", help="Исключать пакеты с этой подстрокой"
     )
+    parser.add_argument(
+        "--reverse", metavar="PACKAGE",
+        help="Обратный поиск: A для JSON или имя@версия для Cargo"
+    )
+    return parser
+
+
+def parse_args(argv=None):
+    """Прочитать настройки приложения из командной строки."""
+    parser = create_parser()
     args = parser.parse_args(argv)
     try:
         validate_args(args)
@@ -164,9 +195,35 @@ def print_graph(root, graph):
         print(f"{format_node(package)} -> {targets}")
 
 
+def print_reverse_dependencies(
+    target, graph, excluded_substring="", get_name=str, scope=""
+):
+    """Вывести обратные зависимости и указать область поиска Cargo."""
+    filtered = bool(
+        excluded_substring and excluded_substring in get_name(target)
+    )
+    packages = [] if filtered else find_reverse_dependencies(
+        graph, target, excluded_substring, get_name
+    )
+    print(f"Обратные зависимости для {format_node(target)}:")
+    if scope:
+        print(f"Область поиска: граф зависимостей {scope}.")
+    if filtered:
+        print("Целевой пакет исключён фильтром.")
+    elif not packages:
+        print("Обратных зависимостей в области поиска нет.")
+    else:
+        for package in packages:
+            print(f"- {format_node(package)}")
+
+
 def run_test_mode(args):
     """Прочитать JSON, построить достижимый граф и вывести его связи."""
     repository = load_test_repository(args.repository)
+    if args.reverse is not None:
+        target = parse_reverse_target(args.reverse, True)
+        print_reverse_dependencies(target, repository, args.filter)
+        return
     graph = build_test_dependency_graph(repository, args.package, args.filter)
     print_graph(args.package, graph)
 
@@ -178,6 +235,18 @@ def run_cargo_mode(args):
     )
     # Первый ключ — корень с фактическим номером версии из индекса.
     root = next(iter(graph), (args.package.lower(), args.version))
+    if args.reverse is not None:
+        target = parse_reverse_target(args.reverse, False)
+        # Метаданные сборки не меняют равенство версий SemVer.
+        target = next((
+            node for node in graph if node[0] == target[0]
+            and version_key(node[1]) == version_key(target[1])
+        ), target)
+        print_reverse_dependencies(
+            target, graph, args.filter, lambda node: node[0],
+            scope=format_node(root)
+        )
+        return
     print_graph(root, graph)
 
 
