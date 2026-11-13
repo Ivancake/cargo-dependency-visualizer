@@ -17,9 +17,10 @@ CLI_ERROR = 2
 class TestCommandLine(unittest.TestCase):
     """Проверки интерфейса командной строки без доступа к сети."""
 
-    def setUp(self):
-        """Подготовить корректный набор параметров для каждого теста."""
-        self.args = [
+    @property
+    def args(self):
+        """Вернуть независимый набор допустимых параметров теста."""
+        return [
             "--package", "serde",
             "--repository", "https://index.crates.io",
             "--version", "1.0.0"
@@ -37,7 +38,6 @@ class TestCommandLine(unittest.TestCase):
     def assert_cli_error(self, args, option):
         """Проверить код завершения и указание ошибочного параметра."""
         stream = io.StringIO()
-        # Ошибки argparse направляются в отдельный поток stderr.
         with redirect_stderr(stream):
             with self.assertRaises(SystemExit) as error:
                 parse_args(args)
@@ -50,7 +50,6 @@ class TestCommandLine(unittest.TestCase):
         output = io.StringIO()
         errors = io.StringIO()
         result = {("serde", "1.0.0"): []} if graph is None else graph
-        # Сеть подменяем, чтобы тесты работали без интернета.
         with patch(
             "src.main.build_cargo_dependency_graph",
             return_value=result, side_effect=error
@@ -103,7 +102,6 @@ class TestCommandLine(unittest.TestCase):
             ),
             "--filter": (" ", "  ", "a\nb", "\t")
         }
-        # Каждый случай получает собственную отметку при падении теста.
         for option, values in cases.items():
             for value in values:
                 with self.subTest(option=option, value=value):
@@ -127,7 +125,6 @@ class TestCommandLine(unittest.TestCase):
             with self.subTest(option=option):
                 args = self.args.copy()
                 position = args.index(option)
-                # Удаляем имя параметра и следующее за ним значение.
                 del args[position:position + 2]
                 self.assert_cli_error(args, option)
 
@@ -144,7 +141,6 @@ class TestCommandLine(unittest.TestCase):
 
     def test_local_repository(self):
         """Проверить тестовый режим и путь к файлу с пробелами."""
-        # Временная папка удаляется автоматически после проверки.
         with TemporaryDirectory() as directory:
             path = Path(directory) / "test graph.json"
             path.write_text('{"A": ["B"], "B": []}', encoding="utf-8")
@@ -156,11 +152,9 @@ class TestCommandLine(unittest.TestCase):
             self.assertTrue(settings.test_mode)
             self.assertEqual(settings.repository, str(path))
             self.assertEqual(settings.package, "A")
-            # Строчные буквы в тестовом имени недопустимы.
             args[args.index("--package") + 1] = "a"
             self.assert_cli_error(args, "--package")
             args[args.index("--package") + 1] = "A"
-            # Проверяем отсутствующий файл и папку вместо файла.
             for invalid in (path.with_name("missing.json"), Path(directory)):
                 with self.subTest(path=invalid):
                     args[position + 1] = str(invalid)
@@ -168,7 +162,6 @@ class TestCommandLine(unittest.TestCase):
 
     def test_unreadable_repository(self):
         """Проверить сообщение об отказе в доступе к файлу."""
-        # Имитируем отказ ОС независимо от прав текущего пользователя.
         with patch("src.main.Path.is_file", return_value=True):
             with patch("src.main.Path.open", side_effect=PermissionError):
                 with self.assertRaisesRegex(ValueError, "не удалось открыть"):

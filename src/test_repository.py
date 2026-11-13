@@ -41,7 +41,6 @@ def validate_test_graph(graph):
                     f"Пакет {dependency} указан в зависимостях {package}, "
                     "но не описан отдельным ключом."
                 )
-    # Удаляем повторы, сохраняя порядок зависимостей в исходном файле.
     return {
         package: list(dict.fromkeys(dependencies))
         for package, dependencies in graph.items()
@@ -51,7 +50,6 @@ def validate_test_graph(graph):
 def load_test_repository(path):
     """Прочитать файл UTF-8 и вернуть проверенный тестовый граф."""
     try:
-        # utf-8-sig также поддерживает файлы с начальной меткой BOM.
         text = Path(path).read_text(encoding="utf-8-sig")
         graph = json.loads(text, object_pairs_hook=unique_object)
     except OSError as error:

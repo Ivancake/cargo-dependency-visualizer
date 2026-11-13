@@ -40,7 +40,6 @@ class CargoRepository:
         if name not in self._versions:
             text = download_package_index(self.repository, name)
             records = read_package_versions(text, name)
-            # Не сохраняем неполные данные при ошибке загрузки или чтения.
             self._versions[name] = records
         return self._versions[name]
 
@@ -89,7 +88,6 @@ class CargoRepository:
             dependency = self.resolve_dependency(description)
             if dependency is not None:
                 dependencies.append(dependency)
-        # Одинаковая версия может встречаться в нескольких видах зависимостей.
         return list(dict.fromkeys(dependencies))
 
 

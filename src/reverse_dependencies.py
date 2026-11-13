@@ -10,7 +10,6 @@ def reverse_graph(graph):
     """Развернуть рёбра, сохранив все вершины и порядок соседей."""
     reversed_graph = {package: [] for package in graph}
     for package, dependencies in graph.items():
-        # Повтор одной зависимости не должен создавать одинаковые рёбра.
         for dependency in dict.fromkeys(dependencies):
             reversed_graph.setdefault(dependency, []).append(package)
     return reversed_graph
@@ -26,5 +25,4 @@ def find_reverse_dependencies(
     reachable = build_dependency_graph(
         package, reversed_graph.__getitem__, excluded_substring, get_name
     )
-    # Корень не включаем в ответ даже при цикле или ссылке на себя.
     return [node for node in reachable if node != package]

@@ -39,7 +39,6 @@ def read_package_versions(index_text, package):
             )
         seen.add(key)
         record_is_yanked(record)
-        # На чтении сохраняем все записи, включая отозванные версии.
         records.append(record)
     return records
 
@@ -57,7 +56,6 @@ def select_latest_version(records, package, requirement):
             f"Для пакета {package} не найдена неотозванная версия "
             f"по требованию {requirement}."
         )
-    # Сравниваем по SemVer, а не по строкам или порядку записей индекса.
     return max(candidates, key=lambda record: version_key(record["vers"]))
 
 

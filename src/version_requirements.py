@@ -76,7 +76,6 @@ def parse_comparator(text):
         raise ValueError(f"Некорректное условие версии: {text}.")
     explicit_operator, value = match.groups()
     numbers, prerelease, wildcard = parse_partial(value)
-    # Подстановка без оператора означает совпадение указанного префикса.
     operation = explicit_operator or ("=" if wildcard else "^")
     return Comparator(operation, numbers, prerelease)
 
@@ -152,7 +151,6 @@ def matches_parsed_requirement(version, comparators):
     if not all(matches_comparator(parsed, item) for item in comparators):
         return False
     core, prerelease = parsed
-    # Предварительный выпуск требует явного суффикса для тех же трёх чисел.
     return not prerelease or any(
         item.prerelease and item.numbers == core for item in comparators
     )

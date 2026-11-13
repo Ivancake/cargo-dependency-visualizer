@@ -14,9 +14,10 @@ from src.main import main, parse_args
 class TestReverseCli(unittest.TestCase):
     """Проверить вывод, ошибки и область обратного поиска."""
 
-    def setUp(self):
-        """Подготовить параметры загрузки графа Cargo."""
-        self.args = [
+    @property
+    def args(self):
+        """Вернуть независимый набор параметров загрузки Cargo."""
+        return [
             "--package", "demo", "--version", "1.0.0",
             "--repository", "https://index.crates.io"
         ]

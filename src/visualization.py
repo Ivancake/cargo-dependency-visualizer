@@ -20,7 +20,6 @@ def collect_nodes(graph):
 def quote_label(value):
     """Экранировать подпись для строки в двойных кавычках языка DOT."""
     text = value.replace("\\", "\\\\").replace('"', '\\"')
-    # Переводы строк обозначаем управляющей последовательностью Graphviz.
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     return '"' + text.replace("\n", "\\n") + '"'
 
@@ -61,7 +60,6 @@ def to_ascii_tree(graph, root, get_label=format_node):
     lines = [get_label(root)]
     expanded = {root}
     path = {root}
-    # Стек хранит вершину, оставшихся соседей и отступ её дочерних строк.
     stack = [(root, tree_children(graph, root), "")]
     while stack:
         parent, children, prefix = stack[-1]

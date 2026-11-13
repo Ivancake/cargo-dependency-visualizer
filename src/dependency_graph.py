@@ -4,7 +4,9 @@
 def build_dependency_graph(
     root, get_dependencies, excluded_substring="", get_name=str
 ):
-    """Получить достижимый граф BFS, исключая пакеты по подстроке имени."""
+    """Получить достижимый граф BFS с фильтрацией по подстроке имени.
+    Рекурсия обрабатывает уровни, обнаруженные вершины не ставятся повторно.
+    """
     if excluded_substring and excluded_substring in get_name(root):
         return {}
     graph = {}
@@ -16,7 +18,6 @@ def build_dependency_graph(
             return
         next_level = []
         for package in level:
-            # Убираем исключённые вершины и повторяющиеся рёбра.
             dependencies = list(dict.fromkeys(
                 dependency for dependency in get_dependencies(package)
                 if not excluded_substring
@@ -25,7 +26,6 @@ def build_dependency_graph(
             graph[package] = dependencies
             for dependency in dependencies:
                 if dependency not in discovered:
-                    # Отмечаем вершину сразу при добавлении в очередь.
                     discovered.add(dependency)
                     next_level.append(dependency)
         visit_level(next_level)

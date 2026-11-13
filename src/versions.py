@@ -21,7 +21,6 @@ def parse_version(value):
         raise ValueError(f"Некорректная версия SemVer: {value}.")
     major, minor, patch, prerelease = match.groups()
     core = (int(major), int(minor), int(patch))
-    # Метаданные после '+' проверены шаблоном и не влияют на сравнение.
     identifiers = tuple(prerelease.split(".")) if prerelease else ()
     return core, identifiers
 
@@ -29,14 +28,12 @@ def parse_version(value):
 def identifier_key(identifier):
     """Подготовить часть предварительной версии для сравнения."""
     if identifier.isdigit():
-        # Числовые части меньше текстовых и сравниваются как числа.
         return False, int(identifier)
     return True, identifier
 
 
 def prerelease_key(identifiers):
     """Поставить стабильный выпуск выше предварительных версий."""
-    # Пустой список частей означает стабильный выпуск без суффикса.
     stable = not identifiers
     parts = tuple(identifier_key(part) for part in identifiers)
     return stable, parts

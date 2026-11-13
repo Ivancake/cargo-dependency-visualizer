@@ -7,7 +7,6 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 
-# Поддерживаем и прямой запуск файла, и импорт из тестов.
 if __package__:
     from .cargo_graph import build_cargo_dependency_graph
     from .dependency_graph import build_test_dependency_graph
@@ -27,7 +26,6 @@ else:
 SUCCESS = 0
 RUNTIME_ERROR = 1
 
-# Части шаблона версии по правилам SemVer.
 NUMBER_PATTERN = r"(?:0|[1-9][0-9]*)"
 PRERELEASE_PART = r"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
 VERSION_PATTERN = (
@@ -39,7 +37,6 @@ VERSION_PATTERN = (
 
 def validate_package(value, test_mode):
     """Проверить имя пакета с учётом режима работы."""
-    # Для тестового графа используем имена вроде A, B или ABC.
     pattern = r"[A-Z]+" if test_mode else r"[A-Za-z][A-Za-z0-9_-]*"
     if not re.fullmatch(pattern, value):
         if test_mode:
@@ -61,12 +58,10 @@ def validate_version(value):
 
 def validate_url(value):
     """Проверить схему, наличие узла и корректность порта URL."""
-    # Пробелы и управляющие символы в адресе считаем ошибкой.
     if any(char.isspace() or not char.isprintable() for char in value):
         raise ValueError("--repository: URL содержит недопустимые символы.")
     try:
         address = urlsplit(value)
-        # Чтение свойства port запускает проверку номера порта.
         _ = address.port
     except ValueError as error:
         raise ValueError("--repository: некорректный URL или порт.") from error
@@ -82,7 +77,6 @@ def validate_file(value):
     try:
         if not path.is_file():
             raise ValueError("--repository: тестовый файл не найден.")
-        # Проверяем доступ; структуру данных проверит загрузчик.
         with path.open("rb"):
             pass
     except OSError as error:
@@ -117,7 +111,6 @@ def validate_args(args):
     """Выполнить проверки значений всех настроек приложения."""
     validate_package(args.package, args.test_mode)
     validate_version(args.version)
-    # Значение --repository проверяем по-разному в двух режимах.
     if args.test_mode:
         validate_file(args.repository)
     else:
@@ -131,12 +124,10 @@ def validate_args(args):
 
 def create_parser():
     """Описать параметры приложения и встроенную справку."""
-    # Создаём обработчик параметров и встроенную справку --help.
     parser = argparse.ArgumentParser(
         description="Визуализатор зависимостей пакетов Cargo.",
         allow_abbrev=False
     )
-    # Обязательные параметры требуют значения после своего имени.
     parser.add_argument(
         "--package", required=True, help="Имя анализируемого пакета"
     )
@@ -144,7 +135,6 @@ def create_parser():
         "--repository", required=True,
         help="URL репозитория или путь к тестовому файлу"
     )
-    # Флаг включается самим присутствием в команде запуска.
     parser.add_argument(
         "--test-mode", action="store_true",
         help="Использовать тестовый репозиторий"
@@ -156,7 +146,6 @@ def create_parser():
         "--ascii", action="store_true",
         help="Дополнительно вывести ASCII-дерево"
     )
-    # Пустая подстрока по умолчанию означает отсутствие фильтрации.
     parser.add_argument(
         "--filter", default="", help="Исключать пакеты с этой подстрокой"
     )
@@ -174,7 +163,6 @@ def parse_args(argv=None):
     try:
         validate_args(args)
     except ValueError as error:
-        # Выводим справку по запуску и понятную причину ошибки.
         parser.error(str(error))
     return args
 
@@ -226,11 +214,9 @@ def run_cargo_mode(args):
     graph = build_cargo_dependency_graph(
         args.repository, args.package, args.version, args.filter
     )
-    # Первый ключ — корень с фактическим номером версии из индекса.
     root = next(iter(graph), (args.package.lower(), args.version))
     if args.reverse is not None:
         target = parse_reverse_target(args.reverse, False)
-        # Метаданные сборки не меняют равенство версий SemVer.
         target = next((
             node for node in graph if node[0] == target[0]
             and version_key(node[1]) == version_key(target[1])
@@ -252,12 +238,10 @@ def main(argv=None):
         else:
             run_cargo_mode(args)
     except ValueError as error:
-        # Сообщения об ошибках отделяем от обычного вывода программы.
         print(f"Ошибка: {error}", file=sys.stderr)
         return RUNTIME_ERROR
     return SUCCESS
 
 
-# Запускаем приложение только при непосредственном запуске файла.
 if __name__ == "__main__":
     raise SystemExit(main())
